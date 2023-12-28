@@ -4,8 +4,8 @@ pipeline {
     environment {
         BuildName = "version-${BUILD_NUMBER}"
         BucketName = "php-bucket11"
-        ApplicationName = "php-machine"
-        EnvironmentName = "Php-machine-env"
+        ApplicationName = "php-testing-app"
+        EnvironmentName = "Php-testing-app-env"
     }
 
     stages {
