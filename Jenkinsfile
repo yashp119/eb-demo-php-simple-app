@@ -6,7 +6,6 @@ pipeline {
         BucketName = "php-bucket11"
         ApplicationName = "php-machine"
         EnvironmentName = "Php-machine-env"
-        Region = "us-east-1"  // Update with your desired AWS region
     }
 
     stages {
@@ -20,7 +19,9 @@ pipeline {
         stage('Upload to S3') {
             steps {
                 script {
-                    sh "aws s3 sync . s3://${BucketName}/ --region ${Region}"
+                    def S3BucketPath = "" // Empty string for the root of the bucket
+                    // Upload the contents of the repository to the root of the S3 bucket
+                    sh "aws s3 sync . s3://${BucketName}/${S3BucketPath} --region us-east-1"
                 }
             }
         }
@@ -28,7 +29,7 @@ pipeline {
         stage('Create Beanstalk Application Version') {
             steps {
                 script {
-                    sh "aws elasticbeanstalk create-application-version --application-name '${ApplicationName}' --version-label '${BuildName}' --description 'Build created from JENKINS. Job:${JOB_NAME}, BuildId:${BUILD_DISPLAY_NAME}, GitCommit:${GIT_COMMIT}, GitBranch:${GIT_BRANCH}' --source-bundle S3Bucket=${BucketName},S3Key=${BuildName}.zip --region ${Region}"
+                    sh "aws elasticbeanstalk create-application-version --application-name '${ApplicationName}' --version-label '${BuildName}' --description 'Build created from JENKINS. Job:${JOB_NAME}, BuildId:${BUILD_DISPLAY_NAME}, GitCommit:${GIT_COMMIT}, GitBranch:${GIT_BRANCH}' --region us-east-1"
                 }
             }
         }
@@ -36,7 +37,7 @@ pipeline {
         stage('Update Beanstalk Environment') {
             steps {
                 script {
-                    sh "aws elasticbeanstalk update-environment --environment-name '${EnvironmentName}' --version-label '${BuildName}' --region ${Region}"
+                    sh "aws elasticbeanstalk update-environment --environment-name '${EnvironmentName}' --version-label '${BuildName}' --region us-east-1"
                 }
             }
         }
