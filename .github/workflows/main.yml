@@ -1,26 +1,120 @@
-name: Build
+name: Build, Scanning the code during PR request and Send Email Report
 
 on:
-  push:
-    branches:
-      - master
-
+  pull_request:
+    types: [opened]
 
 jobs:
   build:
     name: Build
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-      - uses: sonarsource/sonarqube-scan-action@master
+      - name: Get Github action IP
+        id: ip
+        uses: haythem/public-ip@v1.2
+      - name: Setting environment variables..
+        run: |
+          echo "AWS_DEFAULT_REGION=us-east-1" >> $GITHUB_ENV
+          echo "AWS_SG_ID=sg-0dd850b1d6950a5e6" >> $GITHUB_ENV
+          echo "BRANCH_NAME=PR_ID_${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+      - name: Add Github Actions IP to SonarQube Server Security group
+        run: |
+          aws ec2 authorize-security-group-ingress --group-id ${{ env.AWS_SG_ID }} --protocol tcp --port 9000 --cidr ${{ steps.ip.outputs.ipv4 }}/32
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_NEW_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_NEW_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      # If you wish to fail your job when the Quality Gate is red, uncomment the
-      # following lines. This would typically be used to fail a deployment.
-      # - uses: sonarsource/sonarqube-quality-gate-action@master
-      #   timeout-minutes: 5
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_BRANCH: ${{ env.BRANCH_NAME }}
+      - name: Upload SonarQube Report
+        uses: actions/upload-artifact@v2
+        with:
+          name: sonarqube-report
+          path: .scannerwork/report-task.txt
+      - name: Remove Github Actions IP from SonarQube Server Security group
+        run: |
+          aws ec2 revoke-security-group-ingress --group-id ${{ env.AWS_SG_ID }} --protocol tcp --port 9000 --cidr ${{ steps.ip.outputs.ipv4 }}/32
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_NEW_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_NEW_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
+
+  email:
+    name: Send SonarQube Report via Email
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Get Github action IP
+        id: ip
+        uses: haythem/public-ip@v1.2
+      - name: Setting environment variables..
+        run: |
+          echo "AWS_DEFAULT_REGION=us-east-1" >> $GITHUB_ENV
+          echo "AWS_SG_ID=sg-0dd850b1d6950a5e6" >> $GITHUB_ENV
+      - name: Add Github Actions IP to SonarQube Server Security group
+        run: |
+          aws ec2 authorize-security-group-ingress --group-id ${{ env.AWS_SG_ID }} --protocol tcp --port 9000 --cidr ${{ steps.ip.outputs.ipv4 }}/32
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_NEW_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_NEW_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Download SonarQube Report Artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: sonarqube-report
+      - name: Fetch SonarQube Issues
+        run: |
+          curl -u "${{ secrets.SONAR_TOKEN }}:" "${{ secrets.SONAR_HOST_URL }}/api/issues/search?componentKeys=new-repo&resolved=false" -o sonarqube-issues.json
+      - name: Send SonarQube Scanning Report via Email
+        uses: dawidd6/action-send-mail@v2
+        with:
+          server_address: ${{ secrets.EMAIL_HOSTNAME }}
+          server_port: ${{ secrets.EMAIL_PORT }}
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: SonarQube Scanning Report
+          body: This is the SonarQube Scanning Issues and Bugs Report. You can check your code issues using download SonarQube report attachment.
+          to: ${{ secrets.EMAIL_TO_1 }}, ${{ secrets.EMAIL_TO_2 }}, ${{ secrets.EMAIL_TO_3 }}
+          from: ${{ secrets.EMAIL_FROM }}
+          attachments: sonarqube-issues.json
+          content_type: application/json
+      - name: Remove Github Actions IP from SonarQube Server Security group
+        run: |
+          aws ec2 revoke-security-group-ingress --group-id ${{ env.AWS_SG_ID }} --protocol tcp --port 9000 --cidr ${{ steps.ip.outputs.ipv4 }}/32
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_NEW_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_NEW_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
+
+  create-pr-to-develop:
+    name: Create PR to develop
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+      - name: Adding Reviewer For checking Code Changes before PR
+        run: |
+          curl -X POST -H "Authorization: Bearer ${{ secrets.TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers" -d '{
+                "reviewers": ["GithubusernameofReviewer"]
+              }'
+      - name: Enable automerge
+        if: steps.open-pr.outputs.pr_number != ''
+        uses: peter-evans/enable-pull-request-automerge@v2
+        with:
+          token: ${{ secrets.TOKEN }}
+          pull-request-number: ${{ steps.open-pr.outputs.pr_number }}
+          merge-method: merge
